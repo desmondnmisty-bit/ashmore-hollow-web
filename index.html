@@ -89,6 +89,11 @@ body {
 	text-align: center;
 	z-index: 1;
 }
+#status-text {
+	position: absolute; left: 0; right: 0; bottom: calc(10% + 2.2rem); text-align: center;
+	color: #f2e6dc; font-family: 'Noto Sans', 'Droid Sans', Arial, sans-serif; font-size: 1rem;
+	text-shadow: 0 1px 3px #000; padding: 0 1rem;
+}
 		</style>
 		<link id="-gd-engine-icon" rel="icon" type="image/png" href="index.icon.png" />
 <link rel="apple-touch-icon" href="index.apple-touch-icon.png"/>
@@ -106,12 +111,13 @@ body {
 		<div id="status">
 			<img id="status-splash" class="show-image--true fullsize--true use-filter--true" src="index.png" alt="">
 			<progress id="status-progress"></progress>
+			<div id="status-text">Loading Ashmore Hollow…</div>
 			<div id="status-notice"></div>
 		</div>
 
 		<script src="index.js"></script>
 		<script>
-const GODOT_CONFIG = {"args":[],"canvasResizePolicy":2,"emscriptenPoolSize":8,"ensureCrossOriginIsolationHeaders":true,"executable":"index","experimentalVK":false,"fileSizes":{"index.pck":591852572,"index.wasm":39514754},"focusCanvas":true,"gdextensionLibs":[],"godotPoolSize":4};
+const GODOT_CONFIG = {"args":[],"canvasResizePolicy":2,"emscriptenPoolSize":8,"ensureCrossOriginIsolationHeaders":true,"executable":"index","experimentalVK":false,"fileSizes":{"index.pck":122781544,"index.wasm":39514754},"focusCanvas":true,"gdextensionLibs":[],"godotPoolSize":4};
 const GODOT_THREADS_ENABLED = false;
 const engine = new Engine(GODOT_CONFIG);
 
@@ -200,19 +206,43 @@ const engine = new Engine(GODOT_CONFIG);
 	} else {
 		setStatusMode('progress');
 		(async function () {
-			const PARTS = 7, TOTAL = 591852572;
-			const buf = new Uint8Array(TOTAL); let off = 0;
+			const PARTS = 2, TOTAL = 122781544, TRIES = 3;
+			const statusText = document.getElementById('status-text');
+			const mb = (b) => (b / 1048576).toFixed(1);
+			let buf = new Uint8Array(TOTAL); let off = 0;
 			statusProgress.max = TOTAL;
+			const show = (extra) => {
+				statusProgress.value = off;
+				statusText.textContent = 'Downloading game data ' + mb(off) + ' / ' + mb(TOTAL) + ' MB (' + Math.floor(off * 100 / TOTAL) + '%)' + (extra || '');
+			};
+			show();
 			const initP = engine.init('index');
 			for (let p = 0; p < PARTS; p++) {
-				const r = await fetch('index.pck.part' + String(p).padStart(3, '0'));
-				if (!r.ok) throw new Error('Failed to load game data part ' + p + ' (' + r.status + ')');
-				const rd = r.body.getReader();
-				for (;;) { const { done, value } = await rd.read(); if (done) break; buf.set(value, off); off += value.length; statusProgress.value = off; }
+				const start = off;
+				for (let t = 1; ; t++) {
+					try {
+						const r = await fetch('index.pck.part' + String(p).padStart(3, '0'), { cache: 'no-cache' });
+						if (!r.ok) throw new Error('HTTP ' + r.status);
+						const rd = r.body.getReader();
+						for (;;) {
+							const { done, value } = await rd.read();
+							if (done) break;
+							buf.set(value, off); off += value.length; show();
+						}
+						break;
+					} catch (e) {
+						off = start;
+						if (t >= TRIES) throw new Error('Could not download game data (part ' + (p + 1) + ' of ' + PARTS + ') after ' + TRIES + ' tries: ' + e.message + '\nCheck your connection and reload the page.');
+						show(' - connection hiccup, retrying (' + (t + 1) + '/' + TRIES + ')…');
+						await new Promise((res) => setTimeout(res, 1500 * t));
+					}
+				}
 			}
+			statusText.textContent = 'Starting…';
 			await initP;
 			buf.toString = function () { return 'index.pck'; };
 			await engine.preloadFile(buf, 'index.pck');
+			buf = null;
 			await engine.start({ args: ['--main-pack', 'index.pck'] });
 			setStatusMode('hidden');
 		})().catch(displayFailureNotice);
